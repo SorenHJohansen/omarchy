@@ -46,6 +46,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# The bookmarks directory used to be created by the callers before invoking
+# this helper, so running it alone on a fresh profile failed at mktemp. Create
+# it here to make the helper self-contained, and report a failure rather than
+# exiting successfully, the same way the mktemp guard below does.
+if ! mkdir -p "$bookmark_dir"; then
+  echo "Could not create the GTK bookmarks directory." >&2
+  exit 1
+fi
+
 # Report a failure rather than exiting successfully: a silent skip looks
 # identical to success to a caller, and omarchy-provision-user runs under `set -e`
 # and would finalize the user having never seeded the bookmarks. The upgrade
