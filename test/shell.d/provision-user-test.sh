@@ -63,13 +63,20 @@ HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
 pass "bookmarks preserve a user-added entry and their mode"
 
 # Seeding used to check each line and append separately, so two runs both saw a
-# bookmark as missing and both wrote it.
+# bookmark as missing and both wrote it. A bare `wait` returns success even if
+# a worker failed while the others still produced a correct file, so each PID
+# is awaited individually: the test proves every writer succeeded and the
+# final state is right, not just the final state.
 printf 'file://%s/Books Books\n' "$test_tmp/home" >"$bookmarks"
+pids=()
 for _ in {1..8}; do
   HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
     bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null &
+  pids+=("$!")
 done
-wait
+for pid in "${pids[@]}"; do
+  wait "$pid" || fail "concurrent bookmark writer failed"
+done
 
 [[ $(wc -l <"$bookmarks") == 5 ]] ||
   fail "concurrent seeding adds no duplicate bookmarks" "$(cat "$bookmarks")"
