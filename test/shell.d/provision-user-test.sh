@@ -41,3 +41,38 @@ for skill in omarchy diagnose-crash; do
 done
 
 pass "omarchy-provision-user provisions Antigravity and Hermes skills"
+
+bookmarks="$test_tmp/home/.config/gtk-3.0/bookmarks"
+required=(Downloads Projects Pictures Videos)
+
+for dir in "${required[@]}"; do
+  [[ $(grep -Fxc "file://$test_tmp/home/$dir $dir" "$bookmarks") == 1 ]] ||
+    fail "bookmarks hold $dir exactly once"
+done
+pass "bookmarks hold each required folder exactly once"
+
+# A bookmark added by hand survives, and the file keeps the mode it already had:
+# a plain write would reset that to the umask default.
+echo "file:///srv/shared Books Books" >>"$bookmarks"
+chmod 600 "$bookmarks"
+HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+  bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null
+[[ $(grep -Fxc "file:///srv/shared Books Books" "$bookmarks") == 1 ]] ||
+  fail "bookmarks preserve a user-added entry"
+[[ $(stat -c '%a' "$bookmarks") == 600 ]] || fail "bookmarks preserve their mode"
+pass "bookmarks preserve a user-added entry and their mode"
+
+# Seeding used to check each line and append separately, so two runs both saw a
+# bookmark as missing and both wrote it.
+printf 'file://%s/Books Books\n' "$test_tmp/home" >"$bookmarks"
+for _ in {1..8}; do
+  HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+    bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null &
+done
+wait
+
+[[ $(wc -l <"$bookmarks") == 5 ]] ||
+  fail "concurrent seeding adds no duplicate bookmarks" "$(cat "$bookmarks")"
+[[ $(sort "$bookmarks" | uniq -d | wc -l) == 0 ]] ||
+  fail "concurrent seeding adds no duplicate bookmarks" "$(cat "$bookmarks")"
+pass "concurrent seeding adds no duplicate bookmarks"
