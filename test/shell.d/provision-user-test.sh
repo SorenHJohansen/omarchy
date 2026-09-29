@@ -76,3 +76,19 @@ wait
 [[ $(sort "$bookmarks" | uniq -d | wc -l) == 0 ]] ||
   fail "concurrent seeding adds no duplicate bookmarks" "$(cat "$bookmarks")"
 pass "concurrent seeding adds no duplicate bookmarks"
+
+# Renaming onto a symlink replaces the link itself with a regular file, so a
+# dotfile-managed bookmarks file would silently stop being managed. The helper
+# follows the link and rewrites the target instead.
+shared="$test_tmp/shared-bookmarks"
+printf 'file:///srv/shared Books Books\n' >"$shared"
+rm -f "$bookmarks"
+ln -s "$shared" "$bookmarks"
+
+HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+  bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null
+
+[[ -L $bookmarks ]] || fail "a symlinked bookmarks file stays a symlink" "$(ls -l "$bookmarks")"
+[[ $(grep -Fxc "file://$test_tmp/home/Downloads Downloads" "$shared") == 1 ]] ||
+  fail "a symlinked bookmarks file is written through to its target" "$(cat "$shared")"
+pass "a symlinked bookmarks file keeps its link and is written through"

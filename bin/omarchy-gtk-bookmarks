@@ -16,7 +16,15 @@ set -euo pipefail
 # required entries, drop duplicate lines, and rename the result into place. The
 # rename is atomic, so a reader never sees a half-written file, and the required
 # bookmarks end up present exactly once regardless of who else is writing.
+#
+# A symlinked bookmarks file is followed and its target rewritten in place, the
+# way the append this replaces would have. Renaming onto the link itself would
+# swap a symlink out for a regular file, breaking a dotfile-managed setup.
 bookmarks="$HOME/.config/gtk-3.0/bookmarks"
+if [[ -L $bookmarks ]]; then
+  bookmarks=$(readlink -f "$bookmarks" 2>/dev/null) || bookmarks="$HOME/.config/gtk-3.0/bookmarks"
+fi
+bookmark_dir=$(dirname "$bookmarks")
 temporary=""
 
 # Keep the ownership and mode the existing file already had. A plain `> file`
@@ -38,7 +46,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-temporary=$(mktemp "$HOME/.config/gtk-3.0/.bookmarks.XXXXXXXX") || exit 0
+temporary=$(mktemp "$bookmark_dir/.bookmarks.XXXXXXXX") || exit 0
 
 {
   if [[ -f $bookmarks ]]; then
