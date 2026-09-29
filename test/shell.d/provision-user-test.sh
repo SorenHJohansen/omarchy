@@ -100,11 +100,13 @@ HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
   fail "a symlinked bookmarks file is written through to its target" "$(cat "$shared")"
 pass "a symlinked bookmarks file keeps its link and is written through"
 
-# Exiting successfully when the temporary file cannot be created is what let
+# Exiting successfully when the bookmarks cannot be written is what let
 # omarchy-provision-user finalize a user whose bookmarks were never seeded, and
 # it is indistinguishable from success for any caller that does not read stderr.
+# The helper creates the directory itself now, so a missing one no longer
+# fails: an existing-but-unwritable directory is what exercises the failure.
 rm -f "$bookmarks"
-rmdir "$test_tmp/home/.config/gtk-3.0"
+chmod 500 "$test_tmp/home/.config/gtk-3.0"
 
 if HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
   bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null 2>&1; then
