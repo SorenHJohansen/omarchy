@@ -46,7 +46,14 @@ cleanup() {
 }
 trap cleanup EXIT
 
-temporary=$(mktemp "$bookmark_dir/.bookmarks.XXXXXXXX") || exit 0
+# Report a failure rather than exiting successfully: a silent skip looks
+# identical to success to a caller, and omarchy-provision-user runs under `set -e`
+# and would finalize the user having never seeded the bookmarks. The upgrade
+# caller decides for itself whether a failure is fatal.
+if ! temporary=$(mktemp "$bookmark_dir/.bookmarks.XXXXXXXX"); then
+  echo "Could not create a temporary GTK bookmarks file." >&2
+  exit 1
+fi
 
 {
   if [[ -f $bookmarks ]]; then

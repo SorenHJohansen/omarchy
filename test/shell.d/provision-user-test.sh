@@ -92,3 +92,15 @@ HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
 [[ $(grep -Fxc "file://$test_tmp/home/Downloads Downloads" "$shared") == 1 ]] ||
   fail "a symlinked bookmarks file is written through to its target" "$(cat "$shared")"
 pass "a symlinked bookmarks file keeps its link and is written through"
+
+# Exiting successfully when the temporary file cannot be created is what let
+# omarchy-provision-user finalize a user whose bookmarks were never seeded, and
+# it is indistinguishable from success for any caller that does not read stderr.
+rm -f "$bookmarks"
+rmdir "$test_tmp/home/.config/gtk-3.0"
+
+if HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+  bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null 2>&1; then
+  fail "an unwritable bookmarks directory is reported as a failure" "the helper exited successfully"
+fi
+pass "an unwritable bookmarks directory is reported as a failure"
