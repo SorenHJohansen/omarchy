@@ -597,12 +597,19 @@ Item {
   }
 
   // The bulk counterpart of archivePopupFileFor: same two steps — move each
-  // file into historyDir, then trim — for a whole set in one job, instead of
-  // one job (and one pass over history) per popup. $4 onward carries the
-  // names. Rows with no file to move fail their own mv and are skipped, exactly
-  // as the single-row path does.
-  function archivePopupFilesFor(names) {
-    if (!names || names.length === 0) return
+  // file into historyDir, then trim — for a whole set in one job per batch,
+  // instead of one job (and one pass over history) per popup. $4 onward
+  // carries the names. Rows with no file to move fail their own mv and are
+  // skipped, exactly as the single-row path does.
+  //
+  // Names ride on the command line, so one job must not carry an unbounded
+  // pile: execve fails with E2BIG when the whole argv exceeds ARG_MAX, and a
+  // clear-all is the one path that can queue arbitrarily many at once. Chunk
+  // into bounded batches, each its own queued job. Filenames are the numeric
+  // "<timestamp>-<originalId>.json", so a count bound is a byte bound here.
+  readonly property int archiveBatchSize: 500
+
+  function enqueueArchivePopupBatch(names) {
     enqueuePopupFileJob(["bash", "-c",
       "mkdir -p \"$1\" || exit 0\n" +
       "hist=\"$1\" limit=\"$2\" state=\"$3\" imgs=\"$4\"\n" +
@@ -613,6 +620,19 @@ Item {
       String(historyLimit),
       popupStateDir,
       imagesDir].concat(names))
+  }
+
+  function archivePopupFilesFor(names) {
+    if (!names || names.length === 0) return
+    var batch = []
+    for (var i = 0; i < names.length; i++) {
+      batch.push(names[i])
+      if (batch.length === service.archiveBatchSize) {
+        service.enqueueArchivePopupBatch(batch)
+        batch = []
+      }
+    }
+    if (batch.length > 0) service.enqueueArchivePopupBatch(batch)
   }
 
   // Record a notification that never made it to the screen (DND silenced it),
