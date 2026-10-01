@@ -735,6 +735,20 @@ assert(
   /onLifetimeChanged: cardSlot\.restartCountdown\(\)/.test(serviceQml),
   'notifications service re-derives the popup deadline when the timeout changes without a content change'
 )
+// A refresh while the pointer is already over the card must restart the pause
+// timestamp: keep the pause, but only credit time held after the update, or
+// the toast outlives its advertised fresh lifetime by the pre-refresh hold.
+assert(
+  /cardSlot\.heldSince = cardSlot\.hovered \? Date\.now\(\) : 0/.test(serviceQml),
+  'notifications service restarts an in-progress hover pause when the countdown is reset'
+)
+// A toast that appears under a stationary cursor never fires hover-enter, so
+// heldSince would stay 0 and the pause would burn the toast's lifetime. The
+// creation seed is what makes the release path credit that hold.
+assert(
+  /Component\.onCompleted: if \(cardSlot\.hovered\) cardSlot\.heldSince = Date\.now\(\)/.test(serviceQml),
+  'notifications service credits the hover of a toast that appears under the cursor'
+)
 assert(
   /awk 1 \\"\$1\\"\/\*\.json 2>\/dev\/null \|\| true", "--", historyDir/.test(serviceQml),
   'notifications service replays history by reading the archived files'

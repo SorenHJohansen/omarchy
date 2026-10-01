@@ -1101,12 +1101,21 @@ Item {
               }
             }
 
+            // A toast that appears under a stationary cursor never gets a
+            // hover-enter transition, so heldSince would stay 0 and the pause
+            // would silently burn the toast's lifetime. Seed it now; the
+            // release path credits the whole appearance hold the same way a
+            // hover-enter would.
+            Component.onCompleted: if (cardSlot.hovered) cardSlot.heldSince = Date.now()
+
             function restartCountdown() {
               cardSlot.now = Date.now()
               cardSlot.expiresAt = Date.now() + cardSlot.lifetime
-              // Keep an in-progress pause: the pointer is still on the card, so
-              // heldSince stays put and the next release still credits it.
-              if (!cardSlot.hovered) cardSlot.heldSince = 0
+              // Keep an in-progress pause, but restart its timestamp: the
+              // pointer is still on the card, so the pause survives the
+              // refresh, yet time held before the update must not be credited
+              // against the fresh deadline.
+              cardSlot.heldSince = cardSlot.hovered ? Date.now() : 0
             }
 
             Timer {
