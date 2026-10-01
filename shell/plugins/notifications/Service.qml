@@ -1067,6 +1067,10 @@ Item {
               ? Math.max(0, (cardSlot.expiresAt - cardSlot.now) / cardSlot.lifetime)
               : 1.0
             readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
+            // `hovered` lives on the card, so an onHoveredChanged declared here
+            // would watch cardSlot.hovered — which does not exist, and never fire.
+            // Aliasing it into this scope gives the handler below a real signal.
+            readonly property bool hovered: card.hovered
             property double heldSince: 0
 
             // A client updating this notification in place rewrites the row
@@ -1079,11 +1083,16 @@ Item {
             onBodyChanged: cardSlot.restartCountdown()
             onImageChanged: cardSlot.restartCountdown()
 
+            // An urgency or expire-timeout update changes lifetime without
+            // touching the text, so the deadline has to be re-derived or the
+            // toast still expires at the old, now-wrong moment.
+            onLifetimeChanged: cardSlot.restartCountdown()
+
             // Hover pauses the countdown (see ticking), so give back the time
             // the pointer rested on it — otherwise holding a toast open would
             // quietly shorten what is left of it.
             onHoveredChanged: {
-              if (card.hovered) {
+              if (cardSlot.hovered) {
                 cardSlot.heldSince = Date.now()
               } else if (cardSlot.heldSince > 0) {
                 cardSlot.expiresAt += Date.now() - cardSlot.heldSince
@@ -1095,7 +1104,9 @@ Item {
             function restartCountdown() {
               cardSlot.now = Date.now()
               cardSlot.expiresAt = Date.now() + cardSlot.lifetime
-              cardSlot.heldSince = 0
+              // Keep an in-progress pause: the pointer is still on the card, so
+              // heldSince stays put and the next release still credits it.
+              if (!cardSlot.hovered) cardSlot.heldSince = 0
             }
 
             Timer {

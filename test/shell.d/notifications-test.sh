@@ -723,6 +723,18 @@ assert(
   /cardSlot\.expiresAt \+= Date\.now\(\) - cardSlot\.heldSince/.test(serviceQml),
   'notifications service gives back the time a toast was held open on hover'
 )
+// An onHoveredChanged declared beside `hovered` on cardSlot would watch
+// cardSlot.hovered, which does not exist: the handler would never fire and
+// holding a toast open would silently burn its lifetime. The alias is what
+// makes the handler above reachable, so assert it exists rather than assuming.
+assert(
+  /readonly property bool hovered: card\.hovered/.test(serviceQml),
+  'notifications service aliases the card hover state into the delegate scope its handler watches'
+)
+assert(
+  /onLifetimeChanged: cardSlot\.restartCountdown\(\)/.test(serviceQml),
+  'notifications service re-derives the popup deadline when the timeout changes without a content change'
+)
 assert(
   /awk 1 \\"\$1\\"\/\*\.json 2>\/dev\/null \|\| true", "--", historyDir/.test(serviceQml),
   'notifications service replays history by reading the archived files'
