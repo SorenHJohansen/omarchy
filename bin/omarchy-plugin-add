@@ -145,8 +145,12 @@ fi
 
 # -T so a target that appeared since the check above fails instead of being
 # nested inside a directory of the same name; mv would otherwise exit 0 and
-# leave the plugin installed somewhere nothing loads it from.
-mv -T "$stage" "$target"
+# leave the plugin installed somewhere nothing loads it from. A lost race
+# must also drop the staged checkout, or each one leaves a .add.tmp.$$ behind.
+if ! mv -T "$stage" "$target"; then
+  rm -rf "$stage"
+  fail "failed to install plugin '$id': target appeared during installation"
+fi
 echo "Added $id into $target"
 
 omarchy-shell shell rescanPlugins >/dev/null
