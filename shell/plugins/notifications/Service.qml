@@ -353,7 +353,10 @@ Item {
     removePopup(index, "expire")
   }
 
-  function removePopup(index, reason) {
+  // collect, when given an array, receives this row's file name instead of the
+  // file being archived right away — clearPopups() uses it to move a whole batch
+  // in one job. Omit it and the row archives on its own.
+  function removePopup(index, reason, collect) {
     if (index < 0 || index >= popupModel.count) return
     var entry = popupModel.get(index)
     var originalId = entry ? entry.originalId : -1
@@ -367,7 +370,8 @@ Item {
     // instead. Rows that never had a file (a history replay, the empty-history
     // placeholder) archive to nothing, which the move tolerates.
     if (entry) {
-      archivePopupFileFor(entry)
+      if (collect) collect.push(NotificationLogic.popupFileName(entry))
+      else archivePopupFileFor(entry)
       if (restored) delete restoredPopups[NotificationLogic.popupFileName(entry)]
     }
     popupModel.remove(index)
@@ -384,7 +388,12 @@ Item {
   }
 
   function clearPopups() {
-    while (popupModel.count > 0) dismissPopup(0)
+    // Archiving is one queued job per popup, and dismissing every popup is the
+    // one path that can have an unbounded number of them queued at once. Collect
+    // the names on the way out and move them in a single job.
+    var collect = []
+    while (popupModel.count > 0) removePopup(0, "dismiss", collect)
+    archivePopupFilesFor(collect)
   }
 
   // Run the popup's click action, then dismiss. Omarchy's own toasts carry the
@@ -585,6 +594,25 @@ Item {
       NotificationLogic.popupFileName(row),
       popupStateDir,
       imagesDir])
+  }
+
+  // The bulk counterpart of archivePopupFileFor: same two steps — move each
+  // file into historyDir, then trim — for a whole set in one job, instead of
+  // one job (and one pass over history) per popup. $4 onward carries the
+  // names. Rows with no file to move fail their own mv and are skipped, exactly
+  // as the single-row path does.
+  function archivePopupFilesFor(names) {
+    if (!names || names.length === 0) return
+    enqueuePopupFileJob(["bash", "-c",
+      "mkdir -p \"$1\" || exit 0\n" +
+      "hist=\"$1\" limit=\"$2\" state=\"$3\" imgs=\"$4\"\n" +
+      "shift 4\n" +
+      "for name in \"$@\"; do mv -f \"$state/$name\" \"$hist/$name\" 2>/dev/null || continue; done\n" +
+      trimHistoryScript, "--",
+      historyDir,
+      String(historyLimit),
+      popupStateDir,
+      imagesDir].concat(names))
   }
 
   // Record a notification that never made it to the screen (DND silenced it),
