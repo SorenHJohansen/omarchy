@@ -143,7 +143,10 @@ if [[ -e $target || -L $target ]]; then
   fail "plugin '$id' is already installed; update it with: omarchy plugin update $id"
 fi
 
-mv "$stage" "$target"
+# -T so a target that appeared since the check above fails instead of being
+# nested inside a directory of the same name; mv would otherwise exit 0 and
+# leave the plugin installed somewhere nothing loads it from.
+mv -T "$stage" "$target"
 echo "Added $id into $target"
 
 omarchy-shell shell rescanPlugins >/dev/null
