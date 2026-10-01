@@ -171,6 +171,12 @@ function parseExecArgv(value) {
   if (!Array.isArray(parsed) || parsed.length === 0) return null
   for (var i = 0; i < parsed.length; i++) {
     if (typeof parsed[i] !== "string") return null
+    // argv reaches exec as C strings, so a NUL truncates the element there: the
+    // string inspected here is not the string that runs. A leading NUL is the
+    // sharp case, since charAt(0) then reads the NUL rather than a dash and the
+    // option check below passes on what exec sees as "mpv". Reject NUL anywhere
+    // so the checked argv is the executed one.
+    if (parsed[i].indexOf("\u0000") !== -1) return null
   }
   if (!parsed[0] || parsed[0].charAt(0) === "-") return null
   return parsed
