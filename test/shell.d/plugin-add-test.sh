@@ -201,7 +201,7 @@ race_home="$TMPDIR/race-home"
 race_out=$(HOME="$race_home" OMARCHY_PATH="$ROOT" PATH="$mv_stubs:$ROOT/bin:$PATH" \
   omarchy-plugin-add "$incoming" --yes 2>&1) &&
   fail "plugin add must fail when the install move loses the race" "$race_out"
-grep -qF "target appeared during installation" <<<"$race_out" ||
+grep -qF "could not move the staged checkout into place" <<<"$race_out" ||
   fail "plugin add explains the lost install race" "$race_out"
 if compgen -G "$race_home/.config/omarchy/plugins/.add.tmp.*" >/dev/null; then
   fail "plugin add leaves the staged checkout behind after losing the install race"

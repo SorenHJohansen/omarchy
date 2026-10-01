@@ -149,7 +149,7 @@ fi
 # must also drop the staged checkout, or each one leaves a .add.tmp.$$ behind.
 if ! mv -T "$stage" "$target"; then
   rm -rf "$stage"
-  fail "failed to install plugin '$id': target appeared during installation"
+  fail "failed to install plugin '$id': could not move the staged checkout into place (a concurrent add, permissions, or disk space)"
 fi
 echo "Added $id into $target"
 
