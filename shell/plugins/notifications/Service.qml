@@ -1055,8 +1055,19 @@ Item {
             implicitHeight: card.implicitHeight
 
             readonly property real lifetime: service.durationFor(cardSlot.urgency, cardSlot.expireTimeout)
-            property real remainingLifetime: 1.0
+            // Countdown on the wall clock, not on ticks counted. A suspend stops
+            // this Timer outright, so a counted 50 ms step lands as 50 ms of
+            // credit no matter how long the machine was actually asleep — the
+            // toast then outlives the duration it advertises by the whole sleep.
+            // `now` is what the timer bumps: a binding over Date.now() alone is
+            // evaluated once and cached, since nothing it reads ever changes.
+            property double now: Date.now()
+            property double expiresAt: Date.now() + cardSlot.lifetime
+            readonly property real remainingLifetime: cardSlot.lifetime > 0
+              ? Math.max(0, (cardSlot.expiresAt - cardSlot.now) / cardSlot.lifetime)
+              : 1.0
             readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
+            property double heldSince: 0
 
             // A client updating this notification in place rewrites the row
             // under the card (see refreshPopup). New text deserves a full look,
@@ -1064,21 +1075,37 @@ Item {
             // superseded text was already most of the way through. Delegates
             // keep their own row as the model changes around them, so only a
             // real content change lands here.
-            onSummaryChanged: cardSlot.remainingLifetime = 1.0
-            onBodyChanged: cardSlot.remainingLifetime = 1.0
-            onImageChanged: cardSlot.remainingLifetime = 1.0
+            onSummaryChanged: cardSlot.restartCountdown()
+            onBodyChanged: cardSlot.restartCountdown()
+            onImageChanged: cardSlot.restartCountdown()
+
+            // Hover pauses the countdown (see ticking), so give back the time
+            // the pointer rested on it — otherwise holding a toast open would
+            // quietly shorten what is left of it.
+            onHoveredChanged: {
+              if (card.hovered) {
+                cardSlot.heldSince = Date.now()
+              } else if (cardSlot.heldSince > 0) {
+                cardSlot.expiresAt += Date.now() - cardSlot.heldSince
+                cardSlot.heldSince = 0
+                cardSlot.now = Date.now()
+              }
+            }
+
+            function restartCountdown() {
+              cardSlot.now = Date.now()
+              cardSlot.expiresAt = Date.now() + cardSlot.lifetime
+              cardSlot.heldSince = 0
+            }
 
             Timer {
               interval: 50
               repeat: true
               running: cardSlot.ticking
               onTriggered: {
+                cardSlot.now = Date.now()
                 if (cardSlot.lifetime <= 0) return
-                cardSlot.remainingLifetime -= 50.0 / cardSlot.lifetime
-                if (cardSlot.remainingLifetime <= 0) {
-                  cardSlot.remainingLifetime = 0
-                  service.expirePopup(cardSlot.index)
-                }
+                if (cardSlot.remainingLifetime <= 0) service.expirePopup(cardSlot.index)
               }
             }
 

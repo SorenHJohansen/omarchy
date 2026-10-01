@@ -712,8 +712,16 @@ assert(
   'notifications service releases the file queue even when a history read comes back empty'
 )
 assert(
-  /onSummaryChanged: cardSlot\.remainingLifetime = 1\.0/.test(serviceQml),
+  /onSummaryChanged: cardSlot\.restartCountdown\(\)/.test(serviceQml),
   'notifications service restarts the countdown when a toast is updated under it'
+)
+assert(
+  /property double expiresAt: Date\.now\(\) \+ cardSlot\.lifetime/.test(serviceQml),
+  'notifications service measures the popup countdown on the wall clock, not by counting timer ticks'
+)
+assert(
+  /cardSlot\.expiresAt \+= Date\.now\(\) - cardSlot\.heldSince/.test(serviceQml),
+  'notifications service gives back the time a toast was held open on hover'
 )
 assert(
   /awk 1 \\"\$1\\"\/\*\.json 2>\/dev\/null \|\| true", "--", historyDir/.test(serviceQml),
