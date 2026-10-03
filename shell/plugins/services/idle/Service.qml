@@ -31,6 +31,7 @@ Item {
   property bool stayAwakeStateLoaded: false
   property bool hasPendingStayAwakePersist: false
   property bool pendingStayAwakePersist: false
+  property double inhibitorStartedAt: 0
   property bool idledThisCycle: false
   property bool screensaverStartedThisCycle: false
   property string lastEvent: "starting"
@@ -205,8 +206,10 @@ Item {
         idleInhibitor: sleepInhibitorProcess.running
       },
       inhibitors: {
-        wayland: root.stayAwake,
-        systemd: sleepInhibitorProcess.running
+        // What the shell requested and the process it holds, not confirmation
+        // that logind or the compositor accepted the inhibitor.
+        waylandRequested: root.stayAwake,
+        systemdProcessRunning: sleepInhibitorProcess.running
       },
       lastEvent: root.lastEvent,
       lastEventAt: root.lastEventAt
@@ -258,6 +261,7 @@ Item {
     if (root.stayAwake) {
       if (!sleepInhibitorProcess.running) {
         logEvent("inhibitor-start", "systemd idle inhibitor")
+        root.inhibitorStartedAt = Date.now()
         sleepInhibitorProcess.running = true
       }
       return
@@ -367,9 +371,13 @@ Item {
     onExited: function(exitCode, exitStatus) {
       root.logEvent("process-exit", "idle-inhibitor exitCode=" + exitCode + " status=" + exitStatus)
       // The inhibitor should outlive every state change. If it stops while Stay
-      // Awake is still set — a crash, or a stop that raced a re-enable — retry
-      // rather than silently dropping it.
-      if (root.stayAwake) inhibitorRetryTimer.restart()
+      // Awake is still set — a crash, or a stop that raced a re-enable —
+      // reconcile at once, so a rapid off/on does not wait out the backoff. A
+      // process that dies almost immediately is a failed start, so it keeps the
+      // backoff instead of spinning.
+      if (!root.stayAwake) return
+      if (Date.now() - root.inhibitorStartedAt >= 1000) root.reconcileIdleInhibitor()
+      else inhibitorRetryTimer.restart()
     }
   }
 
