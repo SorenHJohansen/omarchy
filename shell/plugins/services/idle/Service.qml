@@ -201,7 +201,12 @@ Item {
       processes: {
         screensaver: screensaverProcess.running,
         lock: lockProcess.running,
-        wake: wakeProcess.running
+        wake: wakeProcess.running,
+        idleInhibitor: sleepInhibitorProcess.running
+      },
+      inhibitors: {
+        wayland: root.stayAwake,
+        systemd: sleepInhibitorProcess.running
       },
       lastEvent: root.lastEvent,
       lastEventAt: root.lastEventAt
@@ -235,6 +240,7 @@ Item {
 
     root.stayAwake = enabled
     root.stayAwakeStateLoaded = true
+    reconcileIdleInhibitor()
 
     if (!changed) return enabled ? "disabled" : "enabled"
 
@@ -243,6 +249,24 @@ Item {
     else Qt.callLater(root.handleIdleChanged)
 
     return enabled ? "disabled" : "enabled"
+  }
+
+  // The state file is the single source of truth; the shell owns the actual
+  // inhibitor for as long as that state says Stay Awake is on. This keeps the
+  // lifetime tied to the shell instead of to a short-lived CLI.
+  function reconcileIdleInhibitor() {
+    if (root.stayAwake) {
+      if (!sleepInhibitorProcess.running) {
+        logEvent("inhibitor-start", "systemd idle inhibitor")
+        sleepInhibitorProcess.running = true
+      }
+      return
+    }
+
+    if (sleepInhibitorProcess.running) {
+      logEvent("inhibitor-stop", "systemd idle inhibitor")
+      sleepInhibitorProcess.running = false
+    }
   }
 
   function setIdleEnabled(value) {
@@ -323,6 +347,71 @@ Item {
     }
   }
 
+  // Quickshell kills its children on a normal exit, but a crash orphans them,
+  // and systemd-inhibit only reaps its own `sleep` child. Clear any inhibitor a
+  // previous shell left behind before this one decides whether to hold one. The
+  // `[s]` keeps the pattern from matching this reaper's own command line.
+  Process {
+    id: staleInhibitorReaper
+    command: ["pkill", "-f", "[s]ystemd-inhibit --what=idle --mode=block --who=omarchy-shell"]
+    onExited: function() { root.refreshStayAwakeState() }
+  }
+
+  // Stay Awake must be visible outside the shell. The Wayland idle inhibitor
+  // below covers Wayland-aware consumers; this logind idle inhibitor covers
+  // logind's automatic idle handling and systemd-aware daemons such as
+  // hypridle. It is `idle` only: Stay Awake means no idle lock or screensaver,
+  // not blocked suspend, which keeps its own system sleep setup. Killing the
+  // process releases the lock, and systemd-inhibit reaps its `sleep` child
+  // through PDEATHSIG, so no separate process tracking is needed.
+  Process {
+    id: sleepInhibitorProcess
+    command: [
+      "systemd-inhibit",
+      "--what=idle",
+      "--mode=block",
+      "--who=omarchy-shell",
+      "--why=Stay awake is enabled",
+      "sleep",
+      "infinity"
+    ]
+    onExited: function(exitCode, exitStatus) {
+      root.logEvent("process-exit", "idle-inhibitor exitCode=" + exitCode + " status=" + exitStatus)
+      // The inhibitor should outlive every state change. If it stops while Stay
+      // Awake is still set — a crash, or a stop that raced a re-enable — retry
+      // rather than silently dropping it.
+      if (root.stayAwake) inhibitorRetryTimer.restart()
+    }
+  }
+
+  Timer {
+    id: inhibitorRetryTimer
+    interval: 2000
+    repeat: false
+    onTriggered: root.reconcileIdleInhibitor()
+  }
+
+  // IdleInhibitor needs a real Wayland surface, so it rides on a zero-size
+  // layer-shell panel rather than the service Item. The empty mask keeps it
+  // from taking input.
+  PanelWindow {
+    id: idleInhibitorWindow
+    anchors { top: true; left: true }
+    implicitWidth: 0
+    implicitHeight: 0
+    color: "transparent"
+    mask: Region {}
+    exclusionMode: ExclusionMode.Ignore
+    WlrLayershell.namespace: "omarchy-stay-awake"
+    WlrLayershell.layer: WlrLayer.Background
+    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+    IdleInhibitor {
+      window: idleInhibitorWindow
+      enabled: root.stayAwake
+    }
+  }
+
   FileView {
     id: stayAwakeStateDirWatcher
     path: root.stayAwakeStateDir
@@ -333,7 +422,9 @@ Item {
 
   Component.onCompleted: {
     logEvent("service-ready")
-    refreshStayAwakeState()
+    // Reap first, so a stale inhibitor from a crashed shell cannot be mistaken
+    // for the one this shell is about to hold.
+    staleInhibitorReaper.running = true
   }
 
   ShellIpc {
