@@ -56,7 +56,6 @@ service_qml="$ROOT/shell/plugins/services/idle/Service.qml"
 rg -q 'IdleInhibitor' "$service_qml" || fail "Stay Awake registers a Wayland idle inhibitor"
 rg -q 'enabled: *root\.stayAwake' "$service_qml" || fail "the Wayland idle inhibitor follows Stay Awake"
 rg -q '"--what=idle"' "$service_qml" || fail "Stay Awake holds a logind idle inhibitor"
-rg -q 'staleInhibitorReaper' "$service_qml" || fail "Stay Awake reaps a crashed shell's orphaned idle inhibitor"
 if rg -q -- '--what=[^"]*sleep' "$service_qml"; then
   fail "Stay Awake does not block suspend"
 fi

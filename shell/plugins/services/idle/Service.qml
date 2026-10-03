@@ -347,23 +347,12 @@ Item {
     }
   }
 
-  // Quickshell kills its children on a normal exit, but a crash orphans them,
-  // and systemd-inhibit only reaps its own `sleep` child. Clear any inhibitor a
-  // previous shell left behind before this one decides whether to hold one. The
-  // `[s]` keeps the pattern from matching this reaper's own command line.
-  Process {
-    id: staleInhibitorReaper
-    command: ["pkill", "-f", "[s]ystemd-inhibit --what=idle --mode=block --who=omarchy-shell"]
-    onExited: function() { root.refreshStayAwakeState() }
-  }
-
   // Stay Awake must be visible outside the shell. The Wayland idle inhibitor
-  // below covers Wayland-aware consumers; this logind idle inhibitor covers
-  // logind's automatic idle handling and systemd-aware daemons such as
-  // hypridle. It is `idle` only: Stay Awake means no idle lock or screensaver,
-  // not blocked suspend, which keeps its own system sleep setup. Killing the
-  // process releases the lock, and systemd-inhibit reaps its `sleep` child
-  // through PDEATHSIG, so no separate process tracking is needed.
+  // covers Wayland-aware consumers; this systemd idle inhibitor covers logind
+  // and systemd-aware idle daemons such as hypridle.
+  //
+  // `idle` is intentional: Stay Awake disables idle handling/locking, but does
+  // not disable explicit suspend or hibernation.
   Process {
     id: sleepInhibitorProcess
     command: [
@@ -391,14 +380,13 @@ Item {
     onTriggered: root.reconcileIdleInhibitor()
   }
 
-  // IdleInhibitor needs a real Wayland surface, so it rides on a zero-size
-  // layer-shell panel rather than the service Item. The empty mask keeps it
-  // from taking input.
+  // IdleInhibitor requires a Wayland surface. Use a minimal PanelWindow as the
+  // surface anchor without affecting layout, input, or layer-shell exclusion.
   PanelWindow {
     id: idleInhibitorWindow
     anchors { top: true; left: true }
-    implicitWidth: 0
-    implicitHeight: 0
+    implicitWidth: 1
+    implicitHeight: 1
     color: "transparent"
     mask: Region {}
     exclusionMode: ExclusionMode.Ignore
@@ -422,9 +410,7 @@ Item {
 
   Component.onCompleted: {
     logEvent("service-ready")
-    // Reap first, so a stale inhibitor from a crashed shell cannot be mistaken
-    // for the one this shell is about to hold.
-    staleInhibitorReaper.running = true
+    refreshStayAwakeState()
   }
 
   ShellIpc {
