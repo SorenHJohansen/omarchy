@@ -61,13 +61,14 @@ printf '%s\n' "$huge_json" | "$PERSIST" "$state" "$images" "200-2.json" ||
 grep -q 'TAILMARKER' "$state/200-2.json" || fail "oversized notification body is not truncated"
 pass "oversized notification persists with its body intact"
 
-# The persistence queue is serial, so the job behind an oversized one is the
-# real regression: if the oversized job wedges the queue, this file never lands.
+# A second notification can still be persisted after an oversized one. These
+# are two sequential helper invocations, not Service.qml's serial queue; the
+# real queue is covered by test/acceptance.d/notifications-persistence-test.sh.
 later_json='{"id":3,"originalId":3,"summary":"later","body":"after","timestamp":300}'
 printf '%s\n' "$later_json" | "$PERSIST" "$state" "$images" "300-3.json" ||
-  fail "notification queued after the oversized one persists"
-[[ -f $state/300-3.json ]] || fail "queued notification file exists"
-pass "notification queued after the oversized one persists"
+  fail "a second notification can be persisted after an oversized notification"
+[[ -f $state/300-3.json ]] || fail "second notification file exists"
+pass "a second notification can be persisted after an oversized notification"
 
 # The history path shares the transport, so it accepts an oversized body too and
 # still trims the directory to the newest entries afterwards.
