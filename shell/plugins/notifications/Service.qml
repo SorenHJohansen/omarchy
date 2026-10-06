@@ -804,11 +804,10 @@ Item {
       }
     }
 
-    // Batch the writes and moves so a large backlog becomes a bounded number
-    // of shell processes, not one per entry. Archive and persist touch
-    // disjoint files, so running the archives first is order-equivalent.
-    enqueueArchiveBatch(archiveNames)
+    // Save reset deadlines before archiving the backlog, so another restart
+    // does not judge retained rows by their old deadlines.
     enqueuePersistBatch(persistItems)
+    enqueueArchiveBatch(archiveNames)
     if (split.live.length === 0) return
 
     Qt.callLater(function() {
