@@ -60,12 +60,44 @@ if rg -q -- '--what=[^"]*sleep' "$service_qml"; then
   fail "Stay Awake does not block suspend"
 fi
 
+# The inhibitor is held through a pipe whose other end this shell owns: a
+# SIGKILLed shell closes the pipe, the reader hits EOF, and systemd-inhibit
+# releases. A detached `sleep infinity` would outlive the shell and stack up
+# an orphan on every restart.
+rg -q 'stdinEnabled: true' "$service_qml" || fail "the inhibitor process holds this shell's end of a pipe"
+rg -q '^[[:space:]]+"cat"$' "$service_qml" || fail "the inhibitor is held by a pipe reader, not a long-lived sleep"
+if rg -q '"infinity"' "$service_qml"; then
+  fail "the inhibitor does not depend on a long-lived sleep"
+fi
+
+# A command that never execs (a missing systemd-inhibit) reports runningChanged
+# but never exited, so recovery must run inside onRunningChanged, and only
+# there: an onExited-keyed retry strands Stay Awake uninhibited.
+inhibitor_block=$(awk '/id: sleepInhibitorProcess/,/^  }/' "$service_qml")
+[[ -n $inhibitor_block ]] || fail "the idle inhibitor process is present"
+reconcile_calls=$(printf '%s\n' "$inhibitor_block" | grep -c 'reconcileIdleInhibitor' || true)
+reconcile_in_running=$(printf '%s\n' "$inhibitor_block" | awk '/onRunningChanged:/,/^    }/' | grep -c 'reconcileIdleInhibitor' || true)
+(( reconcile_calls >= 1 )) || fail "the inhibitor process recovers from unexpected exits"
+if (( reconcile_calls != reconcile_in_running )); then
+  fail "inhibitor recovery runs only from onRunningChanged, where clean exits and failed starts both land"
+fi
+
+# One surface per connected output: a single window with no explicit screen
+# binds the primary output and leaves secondary monitors uninhibited.
+rg -q 'model: Quickshell\.screens' "$service_qml" || fail "the inhibitor surface is created per connected screen"
+rg -q 'screen: modelData' "$service_qml" || fail "each inhibitor surface targets its own output"
+
+# A state-file write landing while a probe is in flight has already been
+# consumed by the watcher without being read; the probe exit must re-run it.
+rg -q 'hasPendingStayAwakeProbe' "$service_qml" || fail "state writes during an in-flight probe are not dropped"
+
 pass "Stay Awake persists state, keeps the toggle shell-IPC-free, and publishes Wayland and logind idle inhibitors"
 
 # Runtime coverage: with a compositor, start a real shell from this tree and
 # drive the actual omarchy-toggle-idle path, then assert the systemd inhibitor
-# is acquired and released. Everything is polled: the state-file watcher, the
-# QML reconcile, and the systemd-inhibit process are all asynchronous.
+# is acquired, released, never orphaned, and converges. Everything is polled:
+# the state-file watcher, the QML reconcile, and the systemd-inhibit process
+# are all asynchronous.
 require_compositor "idle inhibitor runtime test"
 
 if ! command -v quickshell >/dev/null 2>&1; then
@@ -99,15 +131,6 @@ cleanup_runtime() {
 }
 trap cleanup_runtime EXIT
 
-OMARCHY_PATH="$test_root" \
-HOME="$runtime_home" \
-XDG_CONFIG_HOME="$runtime_home/.config" \
-XDG_CACHE_HOME="$runtime_home/.cache" \
-XDG_STATE_HOME="$runtime_home/.local/state" \
-PATH="$stub_bin:$ROOT/bin:$PATH" \
-  quickshell -p "$test_root/shell" --no-color >"$qs_log" 2>&1 &
-QS_PID=$!
-
 shell_ipc() {
   OMARCHY_PATH="$test_root" "$ROOT/bin/omarchy-shell" "$@"
 }
@@ -129,16 +152,75 @@ poll_until() {
   done
 }
 
+start_test_shell() {
+  # Appended, not truncated: the SIGKILL/restart coverage relaunches the
+  # shell and later phases still need the earlier log.
+  OMARCHY_PATH="$test_root" \
+  HOME="$runtime_home" \
+  XDG_CONFIG_HOME="$runtime_home/.config" \
+  XDG_CACHE_HOME="$runtime_home/.cache" \
+  XDG_STATE_HOME="$runtime_home/.local/state" \
+  PATH="$stub_bin:$ROOT/bin:$PATH" \
+    quickshell -p "$test_root/shell" --no-color >>"$qs_log" 2>&1 &
+  QS_PID=$!
+}
+
 shell_ready() {
   kill -0 "$QS_PID" 2>/dev/null && shell_ipc -q idle status >/dev/null 2>&1
 }
 
-for _ in {1..80}; do
-  shell_ready && break
-  kill -0 "$QS_PID" 2>/dev/null || fail_with_shell_log "test shell exited before idle IPC was available"
-  sleep 0.1
-done
-shell_ready || fail_with_shell_log "test shell did not expose idle IPC"
+wait_for_shell_ready() {
+  for _ in {1..80}; do
+    shell_ready && return 0
+    kill -0 "$QS_PID" 2>/dev/null || fail_with_shell_log "test shell exited before idle IPC was available"
+    sleep 0.1
+  done
+  shell_ready || fail_with_shell_log "test shell did not expose idle IPC"
+}
+
+# Layer-shell coverage: the inhibitor surface is per output, and it dies with
+# the shell. The baseline is taken before the test shell starts: a session
+# shell may hold its own surfaces, and they must count as a constant, not as
+# part of this test's deltas.
+layer_checks=0
+expected_layers=0
+layer_baseline=0
+if command -v hyprctl >/dev/null 2>&1 && hyprctl layers -j >/dev/null 2>&1; then
+  layer_count() {
+    local count
+    count=$(hyprctl layers -j 2>/dev/null |
+      jq -r '[.. | objects | select(.namespace? == "omarchy-stay-awake")] | length' 2>/dev/null) || count=""
+    [[ $count =~ ^[0-9]+$ ]] || count=-1
+    printf '%s' "$count"
+  }
+
+  monitors=$(hyprctl monitors -j 2>/dev/null | jq -r 'length' 2>/dev/null) || monitors=""
+  layer_baseline=$(layer_count)
+  if [[ $monitors =~ ^[0-9]+$ ]] && (( monitors >= 1 )) && (( layer_baseline >= 0 )); then
+    layer_checks=1
+    expected_layers=$((layer_baseline + monitors))
+  fi
+fi
+
+if (( layer_checks == 0 )); then
+  skip "hyprctl layers unavailable; skipping inhibitor surface assertions"
+fi
+
+layers_at_shell_count() {
+  (( layer_checks == 1 )) && [[ $(layer_count) -eq $expected_layers ]]
+}
+
+layers_at_baseline() {
+  (( layer_checks == 1 )) && [[ $(layer_count) -eq $layer_baseline ]]
+}
+
+start_test_shell
+wait_for_shell_ready
+
+if (( layer_checks == 1 )); then
+  poll_until "the idle inhibitor surface is mapped once per connected output" layers_at_shell_count
+  pass "the idle inhibitor surface is mapped once per connected output"
+fi
 
 # Count only this feature's inhibitor. A shell already running in the session
 # can hold one too, so assert against a baseline instead of an absolute.
@@ -154,20 +236,105 @@ baseline=$(inhibitor_count)
 inhibitor_acquired() { (( $(inhibitor_count) > baseline )); }
 inhibitor_released() { (( $(inhibitor_count) <= baseline )); }
 
+assert_inhibitor_count() {
+  local expected=$1 description=$2
+  local count
+  count=$(inhibitor_count)
+  (( count == expected )) || fail "$description" "expected $expected inhibitor(s), found $count"
+}
+
 HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" stay-awake >/dev/null
 poll_until "enabling Stay Awake acquires a systemd idle inhibitor" inhibitor_acquired
+assert_inhibitor_count "$((baseline + 1))" "enabling Stay Awake acquires a systemd idle inhibitor"
 pass "enabling Stay Awake acquires a systemd idle inhibitor"
-
-if command -v hyprctl >/dev/null 2>&1 && hyprctl layers -j >/dev/null 2>&1; then
-  layer_present() {
-    hyprctl layers -j 2>/dev/null |
-      jq -e 'any(.. | objects | select(.namespace? == "omarchy-stay-awake"))' >/dev/null 2>&1
-  }
-
-  poll_until "the Wayland idle inhibitor surface is mapped while Stay Awake is on" layer_present
-  pass "the Wayland idle inhibitor surface is mapped while Stay Awake is on"
-fi
 
 HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" allow-idle >/dev/null
 poll_until "disabling Stay Awake releases the systemd idle inhibitor" inhibitor_released
+assert_inhibitor_count "$baseline" "disabling Stay Awake releases the systemd idle inhibitor"
 pass "disabling Stay Awake releases the systemd idle inhibitor"
+
+# Rapid off/on without waiting for each transition: the probe, the watcher,
+# and a still-dying process can all be in flight, and the result must still
+# converge on exactly one inhibitor — not zero, not two.
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" stay-awake >/dev/null
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" allow-idle >/dev/null
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" stay-awake >/dev/null
+poll_until "a rapid off/on converges back onto an inhibitor" inhibitor_acquired
+assert_inhibitor_count "$((baseline + 1))" "a rapid off/on converges on exactly one inhibitor"
+pass "a rapid off/on converges on exactly one inhibitor"
+
+# SIGKILL the shell: without a pipe to EOF on, its systemd-inhibit child would
+# outlive the shell and keep holding the inhibitor after every restart. The
+# restart below must then reacquire exactly one from the persisted state file.
+kill -9 "$QS_PID" 2>/dev/null || true
+wait "$QS_PID" 2>/dev/null || true
+poll_until "a SIGKILLed shell releases its inhibitor instead of orphaning it" inhibitor_released
+assert_inhibitor_count "$baseline" "a SIGKILLed shell releases its inhibitor instead of orphaning it"
+pass "a SIGKILLed shell releases its inhibitor instead of orphaning it"
+
+if (( layer_checks == 1 )); then
+  poll_until "a SIGKILLed shell unmaps its inhibitor surfaces" layers_at_baseline
+  pass "a SIGKILLed shell unmaps its inhibitor surfaces"
+fi
+
+start_test_shell
+wait_for_shell_ready
+
+stay_awake_reported() {
+  shell_ipc idle status 2>/dev/null | jq -e '.stayAwake == true' >/dev/null 2>&1
+}
+poll_until "the restarted shell reads the persisted Stay Awake state" stay_awake_reported
+pass "the restarted shell reads the persisted Stay Awake state"
+
+poll_until "the restarted shell reacquires its systemd idle inhibitor" inhibitor_acquired
+assert_inhibitor_count "$((baseline + 1))" "the restarted shell holds exactly one inhibitor"
+pass "the restarted shell reacquires its systemd idle inhibitor"
+
+if (( layer_checks == 1 )); then
+  poll_until "the restarted shell remaps its inhibitor surfaces" layers_at_shell_count
+  pass "the restarted shell remaps its inhibitor surfaces"
+fi
+
+# A systemd-inhibit that fails on every attempt must back off instead of
+# spinning: attempts stay bounded, the shell stays healthy, and a fixed
+# dependency is picked up by the next retry without restarting the shell.
+cat >"$stub_bin/systemd-inhibit" <<'STUB'
+#!/bin/bash
+exit 1
+STUB
+chmod +x "$stub_bin/systemd-inhibit"
+
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" allow-idle >/dev/null
+poll_until "disabling Stay Awake releases the inhibitor before the failure test" inhibitor_released
+pass "disabling Stay Awake releases the inhibitor before the failure test"
+
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" stay-awake >/dev/null
+sleep 2
+assert_inhibitor_count "$baseline" "a failing inhibitor dependency holds no inhibitor"
+
+exit_log_count() {
+  local count
+  count=$(grep -c 'idle-inhibitor exitCode' "$qs_log" || true)
+  printf '%s' "${count:-0}"
+}
+
+exits_before=$(exit_log_count)
+sleep 5
+exits_after=$(exit_log_count)
+retry_window=$((exits_after - exits_before))
+
+kill -0 "$QS_PID" 2>/dev/null || fail_with_shell_log "test shell died while retrying a failing inhibitor dependency"
+shell_ready || fail_with_shell_log "test shell lost idle IPC while retrying a failing inhibitor dependency"
+if (( retry_window < 1 || retry_window > 10 )); then
+  fail "failing inhibitor attempts are backed off, not spun" "expected 1-10 attempts in 5s, saw $retry_window"
+fi
+pass "failing inhibitor attempts are backed off, not spun"
+
+rm -f "$stub_bin/systemd-inhibit"
+poll_until "a fixed inhibitor dependency is picked up by the retry loop" inhibitor_acquired
+assert_inhibitor_count "$((baseline + 1))" "a fixed inhibitor dependency recovers without a shell restart"
+pass "a fixed inhibitor dependency recovers without a shell restart"
+
+HOME="$runtime_home" "$ROOT/bin/omarchy-toggle-idle" allow-idle >/dev/null
+poll_until "disabling Stay Awake after recovery releases the inhibitor" inhibitor_released
+pass "disabling Stay Awake after recovery releases the inhibitor"

@@ -31,6 +31,7 @@ Item {
   property bool stayAwakeStateLoaded: false
   property bool hasPendingStayAwakePersist: false
   property bool pendingStayAwakePersist: false
+  property bool hasPendingStayAwakeProbe: false
   property double inhibitorStartedAt: 0
   property bool idledThisCycle: false
   property bool screensaverStartedThisCycle: false
@@ -232,7 +233,15 @@ Item {
   }
 
   function refreshStayAwakeState() {
-    if (!stayAwakeStateProbe.running) stayAwakeStateProbe.running = true
+    if (stayAwakeStateProbe.running) {
+      // A write that lands mid-probe has already been consumed by the file
+      // watcher without being read, so flag it: the probe's exit re-runs this
+      // once. The follow-up finds the flag clear and stops, so only real
+      // concurrent writes queue extra probes.
+      root.hasPendingStayAwakeProbe = true
+      return
+    }
+    stayAwakeStateProbe.running = true
   }
 
   function applyStayAwake(value, persist, reason) {
@@ -255,8 +264,10 @@ Item {
   }
 
   // The state file is the single source of truth; the shell owns the actual
-  // inhibitor for as long as that state says Stay Awake is on. This keeps the
-  // lifetime tied to the shell instead of to a short-lived CLI.
+  // inhibitor for as long as that state says Stay Awake is on, instead of a
+  // short-lived CLI. reconcile is the only place that starts or stops it, so
+  // toggles, exits, and retries all converge on at most one inhibitor process
+  // owned by this shell.
   function reconcileIdleInhibitor() {
     if (root.stayAwake) {
       if (!sleepInhibitorProcess.running) {
@@ -334,7 +345,13 @@ Item {
     stdout: SplitParser {
       onRead: function(line) { root.applyStayAwake(String(line).trim() === "yes", false, "state-file") }
     }
-    onExited: function() { stayAwakeStateDirWatcher.reload() }
+    onExited: function() {
+      stayAwakeStateDirWatcher.reload()
+      if (root.hasPendingStayAwakeProbe) {
+        root.hasPendingStayAwakeProbe = false
+        stayAwakeStateProbe.running = true
+      }
+    }
   }
 
   Process {
@@ -351,30 +368,43 @@ Item {
     }
   }
 
-  // Stay Awake must be visible outside the shell. The Wayland idle inhibitor
-  // covers Wayland-aware consumers; this systemd idle inhibitor covers logind
-  // and systemd-aware idle daemons such as hypridle.
+  // Stay Awake must be visible outside the shell. The Wayland surface below
+  // is what the compositor honours for everything watching idle state; this
+  // systemd inhibitor covers logind and idle daemons that ask systemd
+  // directly, such as hypridle.
   //
-  // `idle` is intentional: Stay Awake disables idle handling/locking, but does
-  // not disable explicit suspend or hibernation.
+  // `idle` is intentional: Stay Awake disables idle handling and locking,
+  // but never explicit suspend or hibernation.
+  //
+  // `cat` holds the inhibitor through a pipe whose other end this shell owns:
+  // when the shell dies the pipe closes, cat reads EOF and exits, and
+  // systemd-inhibit releases the inhibitor. A detached `sleep infinity` would
+  // outlive a SIGKILLed shell and leave an orphan holding it after every
+  // restart.
   Process {
     id: sleepInhibitorProcess
+    stdinEnabled: true
     command: [
       "systemd-inhibit",
       "--what=idle",
       "--mode=block",
       "--who=omarchy-shell",
       "--why=Stay awake is enabled",
-      "sleep",
-      "infinity"
+      "cat"
     ]
     onExited: function(exitCode, exitStatus) {
       root.logEvent("process-exit", "idle-inhibitor exitCode=" + exitCode + " status=" + exitStatus)
-      // The inhibitor should outlive every state change. If it stops while Stay
-      // Awake is still set — a crash, or a stop that raced a re-enable —
-      // reconcile at once, so a rapid off/on does not wait out the backoff. A
-      // process that dies almost immediately is a failed start, so it keeps the
-      // backoff instead of spinning.
+    }
+    // Keyed off runningChanged, not exited: a command that never execs (a
+    // missing binary) only reports runningChanged, so an exited-keyed retry
+    // would leave Stay Awake silently uninhibited. A process that held for at
+    // least a second was working, so reconcile at once — a stop that raced a
+    // re-enable must not wait out the backoff. A fast death is a failed
+    // start, so fall back to the one-shot backoff instead of spinning; the
+    // timer reconciles either way, and reconcile no-ops once the state says
+    // otherwise.
+    onRunningChanged: function() {
+      if (running) return
       if (!root.stayAwake) return
       if (Date.now() - root.inhibitorStartedAt >= 1000) root.reconcileIdleInhibitor()
       else inhibitorRetryTimer.restart()
@@ -388,23 +418,34 @@ Item {
     onTriggered: root.reconcileIdleInhibitor()
   }
 
-  // IdleInhibitor requires a Wayland surface. Use a minimal PanelWindow as the
-  // surface anchor without affecting layout, input, or layer-shell exclusion.
-  PanelWindow {
-    id: idleInhibitorWindow
-    anchors { top: true; left: true }
-    implicitWidth: 1
-    implicitHeight: 1
-    color: "transparent"
-    mask: Region {}
-    exclusionMode: ExclusionMode.Ignore
-    WlrLayershell.namespace: "omarchy-stay-awake"
-    WlrLayershell.layer: WlrLayer.Background
-    WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+  // IdleInhibitor attaches to a surface and inhibits the output that surface
+  // sits on, so one window per connected screen: a single window with no
+  // explicit screen resolves to the primary output only and leaves secondary
+  // monitors uninhibited. The windows are plain anchors — nothing drawn, no
+  // input, no layer-shell exclusion — and Variants creates and destroys them
+  // as screens come and go, so a disconnected screen's surface is unmapped
+  // with it.
+  Variants {
+    model: Quickshell.screens
 
-    IdleInhibitor {
-      window: idleInhibitorWindow
-      enabled: root.stayAwake
+    PanelWindow {
+      id: idleInhibitorWindow
+      required property var modelData
+      screen: modelData
+      anchors { top: true; left: true }
+      implicitWidth: 1
+      implicitHeight: 1
+      color: "transparent"
+      mask: Region {}
+      exclusionMode: ExclusionMode.Ignore
+      WlrLayershell.namespace: "omarchy-stay-awake"
+      WlrLayershell.layer: WlrLayer.Background
+      WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+
+      IdleInhibitor {
+        window: idleInhibitorWindow
+        enabled: root.stayAwake
+      }
     }
   }
 
