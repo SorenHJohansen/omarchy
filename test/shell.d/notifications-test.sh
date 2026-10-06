@@ -1091,7 +1091,7 @@ assert(
   'notifications service splits persist batches within the entry and byte caps'
 )
 assert(
-  /enqueueArchiveBatch\(archiveNames\)[\s\S]{0,200}?enqueuePersistBatch\(persistItems\)/.test(serviceQml),
+  /enqueuePersistBatch\(persistItems\)[\s\S]{0,200}?enqueueArchiveBatch\(archiveNames\)/.test(serviceQml),
   'notifications service batches a restore instead of queueing one job per entry'
 )
 assert(
