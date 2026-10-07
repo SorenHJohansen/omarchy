@@ -374,6 +374,28 @@ if grep -E '^[^#]*run_as_user' <<<"$user_setup" >/dev/null; then
 fi
 pass "Omarchy 4 user transition seeds GTK bookmarks without an undefined helper"
 
+# The packaged tree can be older than this fetched script, so the helper may not
+# exist when the upgrade runs. Extract the transition's bookmark block and run
+# its fallback against a root without the helper: an upgrade must still seed the
+# bookmarks rather than mark finalize-user done over an empty file.
+bookmark_block=$(printf '%s\n' "$user_setup" | awk '
+  /^if \[\[ -x \$root\/bin\/omarchy-gtk-bookmarks \]\]/ { inside = 1 }
+  inside { print }
+  inside && /^fi$/ { exit }
+')
+[[ -n $bookmark_block ]] || fail "Omarchy 4 user transition has a bookmark fallback block"
+bookmark_root=$(mktemp -d)
+bookmark_home=$(mktemp -d)
+mkdir -p "$bookmark_home/.config/gtk-3.0"
+HOME="$bookmark_home" root="$bookmark_root" bash -c "$bookmark_block" ||
+  fail "Omarchy 4 upgrade seeds bookmarks without the helper"
+for dir in Downloads Projects Pictures Videos; do
+  [[ $(grep -Fxc "file://$bookmark_home/$dir $dir" "$bookmark_home/.config/gtk-3.0/bookmarks") == 1 ]] ||
+    fail "Omarchy 4 fallback seeds $dir exactly once"
+done
+rm -rf "$bookmark_root" "$bookmark_home"
+pass "Omarchy 4 user transition seeds bookmarks without the packaged helper"
+
 # Lazydocker is optional on fresh installs, but a pre-quattro install keeps it.
 lazydocker_body=$(function_body migrate_lazydocker_package)
 [[ -n $lazydocker_body ]] || fail "upgrade has a Lazydocker replacement step"

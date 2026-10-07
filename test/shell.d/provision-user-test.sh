@@ -100,6 +100,36 @@ HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
   fail "a symlinked bookmarks file is written through to its target" "$(cat "$shared")"
 pass "a symlinked bookmarks file keeps its link and is written through"
 
+# A file whose last line has no trailing newline used to have that last bookmark
+# joined onto the first default line by the read-and-rewrite, changing its label
+# and dropping the Downloads entry. Normalize the existing content first.
+rm -f "$bookmarks"
+printf 'file:///srv/shared Books Books' >"$bookmarks"
+
+HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+  bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null
+
+[[ $(grep -Fxc "file:///srv/shared Books Books" "$bookmarks") == 1 ]] ||
+  fail "a file without a trailing newline keeps its last bookmark intact" "$(cat "$bookmarks")"
+[[ $(grep -Fxc "file://$test_tmp/home/Downloads Downloads" "$bookmarks") == 1 ]] ||
+  fail "a file without a trailing newline still seeds Downloads" "$(cat "$bookmarks")"
+pass "a file without a trailing newline is not merged with the defaults"
+
+# readlink -f fails when the link's target parent is missing. The append this
+# replaces would have failed through the link; a rename would replace the link
+# with a regular file. Stop and leave the link alone instead.
+dangling="$test_tmp/no-such-dir/bookmarks"
+rm -f "$bookmarks"
+ln -s "$dangling" "$bookmarks"
+
+if HOME="$test_tmp/home" PATH="$mock_bin:$ROOT/bin:$PATH" OMARCHY_PATH="$ROOT" \
+  bash "$ROOT/bin/omarchy-gtk-bookmarks" >/dev/null 2>&1; then
+  fail "an unresolvable bookmarks symlink is reported as a failure"
+fi
+[[ -L $bookmarks ]] || fail "an unresolvable bookmarks symlink is left in place" "$(ls -l "$bookmarks")"
+[[ ! -e $bookmarks ]] || fail "an unresolvable bookmarks symlink is not replaced with a file"
+pass "an unresolvable bookmarks symlink is left in place and reported"
+
 # Exiting successfully when the bookmarks cannot be written is what let
 # omarchy-provision-user finalize a user whose bookmarks were never seeded, and
 # it is indistinguishable from success for any caller that does not read stderr.
