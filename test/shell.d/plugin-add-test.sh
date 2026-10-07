@@ -189,21 +189,27 @@ cat >"$mv_stubs/omarchy-shell" <<'STUB'
 exit 0
 STUB
 chmod +x "$mv_stubs/omarchy-shell"
-cat >"$mv_stubs/mv" <<'STUB'
+race_home="$TMPDIR/race-home"
+race_target="$race_home/.config/omarchy/plugins/acme.same"
+cat >"$mv_stubs/mv" <<STUB
 #!/bin/bash
-# omarchy-plugin-add calls mv exactly once, for the install move; failing it
-# simulates the lost race deterministically.
-exit 1
+# The concurrent add wins just before the install move, then the real mv runs,
+# so the race is deterministic and dropping -T nests the checkout again.
+mkdir -p "$race_target"
+echo winner >"$race_target/manifest.json"
+exec $(command -v mv) "\$@"
 STUB
 chmod +x "$mv_stubs/mv"
 
-race_home="$TMPDIR/race-home"
 race_out=$(HOME="$race_home" OMARCHY_PATH="$ROOT" PATH="$mv_stubs:$ROOT/bin:$PATH" \
   omarchy-plugin-add "$incoming" --yes 2>&1) &&
   fail "plugin add must fail when the install move loses the race" "$race_out"
 grep -qF "could not move the staged checkout into place" <<<"$race_out" ||
   fail "plugin add explains the lost install race" "$race_out"
-if compgen -G "$race_home/.config/omarchy/plugins/.add.tmp.*" >/dev/null; then
+if compgen -G "$race_home/.config/omarchy/plugins/.add.tmp.*" >/dev/null ||
+  compgen -G "$race_target/.add.tmp.*" >/dev/null; then
   fail "plugin add leaves the staged checkout behind after losing the install race"
 fi
+[[ $(<"$race_target/manifest.json") == "winner" ]] ||
+  fail "plugin add changes the install that won the race"
 pass "plugin add cleans up the staged checkout when the install move loses the race"
