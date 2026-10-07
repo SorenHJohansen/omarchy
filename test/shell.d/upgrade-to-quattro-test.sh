@@ -364,6 +364,16 @@ reboot_line=$(grep -n 'Rebooting because --reboot was passed' "$upgrade_to_quatt
 (( unsafe_line < reboot_line )) || fail "an unverified kernel cmdline blocks the reboot"
 pass "Omarchy 4 upgrade verifies the UKIs and refuses to reboot unverified"
 
+# The user transition runs its heredoc in a fresh bash as the user, so none of
+# the outer script's run_as_user helpers exist there.
+user_setup=$(awk '/<<.USER_SETUP.$/ { inside = 1; next } $0 == "USER_SETUP" { exit } inside' "$upgrade_to_quattro")
+grep -F '"$root/bin/omarchy-gtk-bookmarks"' <<<"$user_setup" >/dev/null ||
+  fail "Omarchy 4 upgrade seeds GTK bookmarks in the user transition"
+if grep -E '^[^#]*run_as_user' <<<"$user_setup" >/dev/null; then
+  fail "Omarchy 4 user transition calls no run_as_user helper" "$(grep -E '^[^#]*run_as_user' <<<"$user_setup")"
+fi
+pass "Omarchy 4 user transition seeds GTK bookmarks without an undefined helper"
+
 # Lazydocker is optional on fresh installs, but a pre-quattro install keeps it.
 lazydocker_body=$(function_body migrate_lazydocker_package)
 [[ -n $lazydocker_body ]] || fail "upgrade has a Lazydocker replacement step"
