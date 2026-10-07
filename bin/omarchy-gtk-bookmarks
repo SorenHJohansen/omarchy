@@ -27,6 +27,15 @@ if [[ -L $bookmarks ]]; then
     exit 1
   fi
 fi
+
+# A directory, fifo, device, or a symlink to one would make the rename below
+# move the temporary into it (or replace it) rather than write the bookmarks
+# file. Refuse instead of silently scattering a temporary.
+if [[ -e $bookmarks && ! -f $bookmarks ]]; then
+  echo "The GTK bookmarks path is not a regular file." >&2
+  exit 1
+fi
+
 bookmark_dir=$(dirname "$bookmarks")
 temporary=""
 
@@ -78,6 +87,13 @@ fi
     echo "file://$HOME/$dir $dir"
   done
 } | awk '!seen[$0]++' >"$temporary"
+
+# Rewriting an already-correct file would churn its inode and mtime for nothing:
+# the append this replaces left a fully seeded file untouched. Stop when the
+# built result already matches what is there.
+if [[ -f $bookmarks ]] && cmp -s "$temporary" "$bookmarks"; then
+  exit 0
+fi
 
 preserve_existing_ownership
 mv "$temporary" "$bookmarks"
