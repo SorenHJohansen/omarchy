@@ -412,21 +412,41 @@ function popupExpired(entry, duration, now) {
   return (Number(now) - Number((entry || {}).timestamp || 0)) >= lifetime
 }
 
-// The countdown advances by the time that actually elapsed between ticks, not
-// by a fixed step per tick. A suspend freezes the shell without changing the
-// Timer's `running` state, so on resume the first tick sees the whole sleep and
-// the toast expires on schedule instead of outliving its lifetime. Voluntary
-// pauses (a hover, a covered output) stop the Timer, and the caller re-baselines
-// so they credit nothing. A lifetime of 0 marks a critical popup that never
-// expires.
-function popupTick(remaining, lifetime, elapsed) {
+// A popup countdown is the pair (remaining, lastTick): the fraction of the
+// lifetime still to run, and the wall-clock time its elapsed accounting is based
+// on. Events move it forward:
+//
+//   "tick"    a Timer tick while running — charge the time since lastTick
+//   "pause"   the Timer stopped (hover, a covered output) — charge the active
+//             time up to the pause, so entering between ticks cannot forgive the
+//             partial tick, then hold
+//   "resume"  the Timer restarted — re-baseline without charging the pause
+//   "restart" a content refresh — start a full lifetime over
+//
+// A suspend is a gap with no event at all, so the first tick after it charges
+// the whole sleep. Charging only the time actually run keeps a single pause
+// primitive: stopping the Timer pauses, which is what hover and a covered output
+// already do. A lifetime of 0 marks a critical popup that never counts down.
+function popupCountdown(state, lifetime, event, now) {
+  var current = state || {}
+  var at = Number(now)
+  if (!isFinite(at)) at = 0
   var duration = Number(lifetime || 0)
-  if (!isFinite(duration) || duration <= 0) return 1.0
-  var left = Number(remaining)
-  if (!isFinite(left)) left = 1.0
-  var span = Number(elapsed)
+  if (!isFinite(duration) || duration <= 0) return { remaining: 1, lastTick: at }
+
+  var left = Number(current.remaining)
+  if (!isFinite(left)) left = 1
+
+  if (event === "restart") return { remaining: 1, lastTick: at }
+  if (event === "resume") return { remaining: left, lastTick: at }
+
+  // "tick" and "pause" both charge the active time up to `now`. A backwards,
+  // unreadable, or unset clock charges nothing rather than adding lifetime back.
+  var last = Number(current.lastTick)
+  if (!isFinite(last)) last = at
+  var span = at - last
   if (!isFinite(span) || span < 0) span = 0
-  return Math.max(0, left - span / duration)
+  return { remaining: Math.max(0, left - span / duration), lastTick: at }
 }
 
 function popupPlacement(barPosition, barClearance, gapsOut) {
@@ -509,7 +529,7 @@ if (typeof module !== "undefined") {
     serializePopup: serializePopup,
     parsePopupFiles: parsePopupFiles,
     popupExpired: popupExpired,
-    popupTick: popupTick,
+    popupCountdown: popupCountdown,
     popupPlacement: popupPlacement
   }
 }
