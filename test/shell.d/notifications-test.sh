@@ -792,6 +792,7 @@ assertEqual(step({ remaining: 0.5, lastTick: 0 }, "tick", NaN).remaining, 0.5, '
 assertClose(step({ remaining: 0.5, lastTick: 1000 }, "tick", 1000).remaining, 0.5, 'a tick with no elapsed time charges nothing')
 // Critical popups and exhausted countdowns stay put.
 assertEqual(step({ remaining: 1, lastTick: 0 }, "tick", 999999, 0).remaining, 1, 'a critical popup with no lifetime never counts down')
+assertEqual(step({ remaining: 0.2, lastTick: 0 }, "pause", 100, 0).remaining, 0.2, 'a popup turned critical in place keeps the lifetime it had left')
 assertEqual(step({ remaining: 0, lastTick: 0 }, "tick", 50000).remaining, 0, 'an expired countdown does not go negative')
 assertEqual(step({ remaining: 1, lastTick: 0 }, "pause", 1000).remaining, 0, 'a pause exactly at the deadline expires the countdown')
 // An unset baseline charges nothing rather than inventing elapsed time.

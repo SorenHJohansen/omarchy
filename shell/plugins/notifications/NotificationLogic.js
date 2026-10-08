@@ -434,12 +434,13 @@ function popupCountdown(state, lifetime, event, now) {
   var at = Number(now)
   if (!isFinite(at)) at = 0
   var duration = Number(lifetime || 0)
-  if (!isFinite(duration) || duration <= 0) return { remaining: 1, lastTick: at, expired: false }
-
   var left = Number(current.remaining)
   if (!isFinite(left)) left = 1
 
   if (event === "restart") return { remaining: 1, lastTick: at, expired: false }
+  // A popup turned critical in place keeps what it had left, so a later
+  // demotion resumes from there rather than from a fresh lifetime.
+  if (!isFinite(duration) || duration <= 0) return { remaining: left, lastTick: at, expired: false }
   if (event === "resume") return { remaining: left, lastTick: at, expired: left <= 0 }
 
   // "tick" and "pause" both charge the active time up to `now`. A backwards,
