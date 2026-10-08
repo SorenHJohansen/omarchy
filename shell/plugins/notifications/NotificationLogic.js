@@ -426,19 +426,21 @@ function popupExpired(entry, duration, now) {
 // A suspend is a gap with no event at all, so the first tick after it charges
 // the whole sleep. Charging only the time actually run keeps a single pause
 // primitive: stopping the Timer pauses, which is what hover and a covered output
-// already do. A lifetime of 0 marks a critical popup that never counts down.
+// already do. `expired` reports that the countdown reached zero, so the caller
+// removes the popup whether a tick ran it out or settling a pause did. A lifetime
+// of 0 marks a critical popup that never counts down.
 function popupCountdown(state, lifetime, event, now) {
   var current = state || {}
   var at = Number(now)
   if (!isFinite(at)) at = 0
   var duration = Number(lifetime || 0)
-  if (!isFinite(duration) || duration <= 0) return { remaining: 1, lastTick: at }
+  if (!isFinite(duration) || duration <= 0) return { remaining: 1, lastTick: at, expired: false }
 
   var left = Number(current.remaining)
   if (!isFinite(left)) left = 1
 
-  if (event === "restart") return { remaining: 1, lastTick: at }
-  if (event === "resume") return { remaining: left, lastTick: at }
+  if (event === "restart") return { remaining: 1, lastTick: at, expired: false }
+  if (event === "resume") return { remaining: left, lastTick: at, expired: left <= 0 }
 
   // "tick" and "pause" both charge the active time up to `now`. A backwards,
   // unreadable, or unset clock charges nothing rather than adding lifetime back.
@@ -446,7 +448,8 @@ function popupCountdown(state, lifetime, event, now) {
   if (!isFinite(last)) last = at
   var span = at - last
   if (!isFinite(span) || span < 0) span = 0
-  return { remaining: Math.max(0, left - span / duration), lastTick: at }
+  var remaining = Math.max(0, left - span / duration)
+  return { remaining: remaining, lastTick: at, expired: remaining <= 0 }
 }
 
 function popupPlacement(barPosition, barClearance, gapsOut) {

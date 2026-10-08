@@ -796,6 +796,17 @@ assertEqual(step({ remaining: 0, lastTick: 0 }, "tick", 50000).remaining, 0, 'an
 assertEqual(step({ remaining: 1, lastTick: 0 }, "pause", 1000).remaining, 0, 'a pause exactly at the deadline expires the countdown')
 // An unset baseline charges nothing rather than inventing elapsed time.
 assertEqual(step({}, "tick", 500).remaining, 1, 'a countdown with no baseline charges nothing')
+// Reaching zero must be reported so the popup is removed, whichever event got
+// there — the pause case is the second regression the review found.
+assertEqual(step({ remaining: 1, lastTick: 0 }, "tick", 1000).expired, true, 'a tick that runs the lifetime out reports the popup expired')
+assertEqual(step({ remaining: 1, lastTick: 0 }, "tick", 90000000).expired, true, 'a suspend that runs the lifetime out reports the popup expired')
+assertEqual(step({ remaining: 1, lastTick: 0 }, "pause", 1000).expired, true, 'a pause that runs the lifetime out reports the popup expired')
+assertEqual(step({ remaining: 0.02, lastTick: 0 }, "pause", 30).expired, true, 'hovering in the final partial tick expires the popup rather than holding it')
+assertEqual(step({ remaining: 1, lastTick: 0 }, "pause", 30).expired, false, 'a pause with lifetime left reports no expiry')
+assertEqual(step({ remaining: 0.5, lastTick: 0 }, "resume", 100).expired, false, 'a resume reports no expiry')
+assertEqual(step({ remaining: 0.4, lastTick: 0 }, "restart", 100).expired, false, 'a restart reports no expiry')
+assertEqual(step({ remaining: 1, lastTick: 0 }, "tick", 999999, 0).expired, false, 'a critical popup never reports expiry')
+assertEqual(step({}, "tick", 500).expired, false, 'a countdown with no baseline reports no expiry')
 assert(
   /awk 1 \\"\$1\\"\/\*\.json 2>\/dev\/null \|\| true", "--", historyDir/.test(serviceQml),
   'notifications service replays history by reading the archived files'

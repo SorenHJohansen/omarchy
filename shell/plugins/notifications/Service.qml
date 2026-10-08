@@ -1062,6 +1062,9 @@ Item {
             // tick, a pause, a resume, and a restart move it.
             property real remainingLifetime: 1.0
             property double lastTick: Date.now()
+            // Latched the moment the countdown reaches zero, so a delegate being
+            // torn down cannot expire a second time against a stale index.
+            property bool retired: false
             readonly property bool ticking: cardSlot.lifetime > 0 && !card.hovered
 
             // A client updating this notification in place rewrites the row
@@ -1074,10 +1077,17 @@ Item {
             onBodyChanged: cardSlot.applyCountdown("restart")
             onImageChanged: cardSlot.applyCountdown("restart")
 
+            // The countdown reaching zero removes the popup, whether a tick ran
+            // it out or settling a pause did.
             function applyCountdown(event) {
+              if (cardSlot.retired) return
               var next = NotificationLogic.popupCountdown({ remaining: cardSlot.remainingLifetime, lastTick: cardSlot.lastTick }, cardSlot.lifetime, event, Date.now())
               cardSlot.remainingLifetime = next.remaining
               cardSlot.lastTick = next.lastTick
+              if (next.expired) {
+                cardSlot.retired = true
+                service.expirePopup(cardSlot.index)
+              }
             }
 
             Timer {
@@ -1085,15 +1095,12 @@ Item {
               repeat: true
               running: cardSlot.ticking
               // Stopping the Timer pauses: settle the partial tick first so
-              // entering between ticks cannot forgive the elapsed time. Starting
-              // it again re-baselines, so the paused span (hover, covered
-              // output) is not charged.
+              // entering between ticks cannot forgive the elapsed time, and
+              // expire if that settle ran the countdown out. Starting it again
+              // re-baselines, so the paused span (hover, covered output) is not
+              // charged.
               onRunningChanged: cardSlot.applyCountdown(running ? "resume" : "pause")
-              onTriggered: {
-                if (cardSlot.lifetime <= 0) return
-                cardSlot.applyCountdown("tick")
-                if (cardSlot.remainingLifetime <= 0) service.expirePopup(cardSlot.index)
-              }
+              onTriggered: cardSlot.applyCountdown("tick")
             }
 
             NotificationCard {
