@@ -412,6 +412,23 @@ function popupExpired(entry, duration, now) {
   return (Number(now) - Number((entry || {}).timestamp || 0)) >= lifetime
 }
 
+// The countdown advances by the time that actually elapsed between ticks, not
+// by a fixed step per tick. A suspend freezes the shell without changing the
+// Timer's `running` state, so on resume the first tick sees the whole sleep and
+// the toast expires on schedule instead of outliving its lifetime. Voluntary
+// pauses (a hover, a covered output) stop the Timer, and the caller re-baselines
+// so they credit nothing. A lifetime of 0 marks a critical popup that never
+// expires.
+function popupTick(remaining, lifetime, elapsed) {
+  var duration = Number(lifetime || 0)
+  if (!isFinite(duration) || duration <= 0) return 1.0
+  var left = Number(remaining)
+  if (!isFinite(left)) left = 1.0
+  var span = Number(elapsed)
+  if (!isFinite(span) || span < 0) span = 0
+  return Math.max(0, left - span / duration)
+}
+
 function popupPlacement(barPosition, barClearance, gapsOut) {
   var position = String(barPosition || "top")
   var clearance = Number(barClearance)
@@ -492,6 +509,7 @@ if (typeof module !== "undefined") {
     serializePopup: serializePopup,
     parsePopupFiles: parsePopupFiles,
     popupExpired: popupExpired,
+    popupTick: popupTick,
     popupPlacement: popupPlacement
   }
 }

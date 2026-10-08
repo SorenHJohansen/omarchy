@@ -712,8 +712,39 @@ assert(
   'notifications service releases the file queue even when a history read comes back empty'
 )
 assert(
-  /onSummaryChanged: cardSlot\.remainingLifetime = 1\.0/.test(serviceQml),
+  /onSummaryChanged: cardSlot\.restartCountdown\(\)/.test(serviceQml),
   'notifications service restarts the countdown when a toast is updated under it'
+)
+// The countdown advances by the time that actually elapsed, not by a fixed
+// step per tick. A suspend freezes the shell without toggling the Timer's
+// `running`, so on resume the first tick charges the whole sleep; a voluntary
+// pause stops the Timer and re-baselines, so it charges nothing. Drive the
+// arithmetic directly rather than matching the QML source, so these fail if the
+// behavior regresses.
+assertEqual(
+  notifications.popupTick(1, 30000, 15000),
+  0.5,
+  'notifications advance the popup countdown by the time that actually elapsed'
+)
+assertEqual(
+  notifications.popupTick(0.5, 30000, 7500),
+  0.25,
+  'notifications keep subtracting elapsed time across successive ticks'
+)
+assertEqual(
+  notifications.popupTick(0.5, 30000, 90000000),
+  0,
+  'a popup whose timer was frozen through a suspend expires on the first tick after resume'
+)
+assertEqual(
+  notifications.popupTick(0.5, 30000, 0),
+  0.5,
+  'a stopped timer advances nothing, so a hover hold preserves the countdown'
+)
+assertEqual(
+  notifications.popupTick(1, 0, 999999),
+  1,
+  'a critical popup with no lifetime never counts down'
 )
 assert(
   /awk 1 \\"\$1\\"\/\*\.json 2>\/dev\/null \|\| true", "--", historyDir/.test(serviceQml),
