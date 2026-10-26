@@ -282,7 +282,11 @@ after=$(number "$(probe remaining)" "a held card holds a numeric countdown")
 (( after >= held - 1 )) || fail "a held card charges nothing while it is held" "held: $held, after: $after"
 
 [[ $(probe hold false) == "ok" ]] || fail_with_log "the probe releases the card"
-sleep 1
+sleep 1.6
 resumed=$(number "$(probe remaining)" "a released card holds a numeric countdown")
-(( resumed <= after - 700 )) || fail "a released card charges the time it runs" "after: $after, resumed: $resumed"
+# Both bounds matter. A release that charged the held 1.5 s as well would drop
+# this by about 3 s, and a release that never restarted the timer would drop it
+# by nothing; either passes a one-sided check.
+(( resumed <= after - 800 )) || fail "a released card charges the time it runs" "after: $after, resumed: $resumed"
+(( resumed >= after - 2000 )) || fail "a released card charges only the time it ran" "after: $after, resumed: $resumed"
 pass "a held card charges nothing, and a released one charges again"
